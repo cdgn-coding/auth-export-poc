@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"io"
 	"os"
+	"sync"
 )
 
 type ReaderByLine struct{}
@@ -12,10 +13,12 @@ func NewReaderByLine() ReaderByLine {
 	return ReaderByLine{}
 }
 
-func (r ReaderByLine) Read(filepath string, lineChannel chan<- string) error {
+func (r ReaderByLine) Read(filepath string, lineChannel chan<- string, wg *sync.WaitGroup) {
+	defer wg.Done()
+
 	f, errorOpening := os.OpenFile(filepath, os.O_RDONLY, os.ModePerm)
 	if errorOpening != nil {
-		return errorOpening
+		panic(errorOpening)
 	}
 	defer f.Close()
 	defer close(lineChannel)
@@ -30,10 +33,8 @@ func (r ReaderByLine) Read(filepath string, lineChannel chan<- string) error {
 				break
 			}
 
-			return errorReading
+			panic(errorReading)
 		}
 		lineChannel <- lineRead
 	}
-
-	return nil
 }

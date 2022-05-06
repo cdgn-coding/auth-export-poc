@@ -7,6 +7,7 @@ import (
 	json "encoding/json"
 	"github.com/auth0/go-auth0/management"
 	"sync"
+	"time"
 )
 
 type UsersSyncer struct {
@@ -37,51 +38,86 @@ func (syncer UsersSyncer) Run() error {
 		return errorGettingFile
 	}
 
-	// Iterate File
-	lineReader := files.NewReaderByLine()
-	usersJson := make(chan string, 1)
-	var wg sync.WaitGroup
+	jobCreationTime := *completedJob.CreatedAt
+	syncer.syncWithFile(jobCreationTime, filepath)
 
-	wg.Add(1)
-	go syncer.updateOperators(usersJson, &wg)
-	lineReader.Read(filepath, usersJson)
-
-	wg.Wait()
 	return nil
 }
 
-func (syncer *UsersSyncer) updateOperators(usersJson <-chan string, wg *sync.WaitGroup) {
+func (syncer *UsersSyncer) syncWithFile(jobCreationTime time.Time, filepath string) {
+	lineReader := files.NewReaderByLine()
+	jsonLine := make(chan string, 1)
+
+	var wg sync.WaitGroup
+
+	wg.Add(1)
+	go syncer.processLineByLine(jobCreationTime, jsonLine, &wg)
+
+	wg.Add(1)
+	go lineReader.Read(filepath, jsonLine, &wg)
+
+	wg.Wait()
+}
+
+func (syncer *UsersSyncer) processLineByLine(jobCreationTime time.Time, usersJson <-chan string, wg *sync.WaitGroup) {
 	defer wg.Done()
+	var existingUsers = make([]string, 0)
 
 	for userJson := range usersJson {
-		var user management.User
-		errorUnmarshalling := json.Unmarshal([]byte(userJson), &user)
-		if errorUnmarshalling != nil {
-			panic(errorUnmarshalling)
-		}
+		operator := syncer.updateOperator(userJson)
+		existingUsers = append(existingUsers, operator.ID)
+	}
 
-		operator := domain.Operator{
-			ID:            user.GetID(),
-			Name:          user.GetName(),
-			Email:         user.GetEmail(),
-			Organizations: make([]domain.Organization, 0),
-		}
+	err := syncer.operatorService.OuterDelete(existingUsers, jobCreationTime)
+	if err != nil {
+		return
+	}
+}
 
-		auth0OrgList, errorFetchingOrgs := syncer.auth0Service.GetUserOrganizations(user.GetID())
-		if errorFetchingOrgs != nil {
-			panic(errorFetchingOrgs)
-		}
-		for _, auth0Org := range auth0OrgList {
-			operator.Organizations = append(operator.Organizations, domain.Organization{
-				ID:          auth0Org.GetID(),
-				Name:        auth0Org.GetName(),
-				DisplayName: auth0Org.GetDisplayName(),
-			})
-		}
-		errorSavingOperator := syncer.operatorService.Save(&operator)
+func (syncer *UsersSyncer) updateOperator(userJson string) *domain.Operator {
+	var user management.User
+	var err error
+	var operator *domain.Operator
+	err = json.Unmarshal([]byte(userJson), &user)
 
-		if errorSavingOperator != nil {
-			panic(errorSavingOperator)
-		}
+	if err != nil {
+		panic(err)
+	}
+
+	operator, err = syncer.toDomainOperator(user)
+
+	err = syncer.operatorService.Save(operator)
+
+	if err != nil {
+		panic(err)
+	}
+	return operator
+}
+
+func (syncer *UsersSyncer) toDomainOperator(user management.User) (*domain.Operator, error) {
+	operator := &domain.Operator{
+		ID:    user.GetID(),
+		Name:  user.GetName(),
+		Email: user.GetEmail(),
+	}
+
+	orgList, err := syncer.auth0Service.GetUserOrganizations(user.GetID())
+	if err != nil {
+		return nil, err
+	}
+
+	operator.Organizations = make([]domain.Organization, len(orgList))
+	for i, auth0Org := range orgList {
+		operator.Organizations[i] = syncer.toDomainOrganization(auth0Org)
+	}
+
+	return operator, nil
+}
+
+func (syncer *UsersSyncer) toDomainOrganization(auth0Org *management.Organization) domain.Organization {
+	return domain.Organization{
+		ID:          auth0Org.GetID(),
+		Name:        auth0Org.GetName(),
+		DisplayName: auth0Org.GetDisplayName(),
 	}
 }
