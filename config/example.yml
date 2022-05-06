@@ -1,0 +1,10 @@
+auth0:
+  client_id: ""
+  client_secret: ""
+  domain: ""
+  databaseConnection: ""
+database:
+  password: "pass"
+  user: "user"
+  db: "management"
+  host: "localhost"
