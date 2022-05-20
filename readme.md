@@ -1,4 +1,4 @@
-# Auth0 Users Sync Job POC
+# Auth0 Export Users Example
 
 This project synchronizes users from an Auth0 database 
 with a PostgreSQL with the goal of being able to perform queries
